@@ -222,6 +222,15 @@ static void route_api(const char*method,const char*path,const char*body,JsonBuf*
  else if(strstr(path,"/api/common")){char target[96];int other=-1;if(param(path,"target",target,sizeof target))ht_get(&fg_names,target,&other);if(other<0){*status=400;jb_printf(b,"{\"error\":\"Unknown target\",\"engine_us\":%llu}",ticks_us()-start);}else{int ids[128];size_t n=mutual_friends(&fg_graph,uid,other,ids,128);jb_add(b,"{\"mutual_friends\":[");for(size_t i=0;i<n&&i<128;i++){if(i)jb_char(b,',');jb_quote(b,fg_users[ids[i]].name);}jb_printf(b,"],\"count\":%zu,\"engine_us\":%llu}",n,ticks_us()-start);}}
  else if(strstr(path,"/api/top-users")){MaxHeap h;heap_init(&h);int lim=param_int(path,"limit",10);for(size_t i=0;i<fg_user_count;i++)heap_push(&h,(HeapItem){(int)i,(int)fg_graph.adj[i].len});jb_add(b,"{\"users\":[");for(int i=0;i<lim&&h.len;i++){HeapItem it;heap_pop(&h,&it);if(i)jb_char(b,',');jb_printf(b,"{\"id\":%d,\"name\":",it.id);jb_quote(b,fg_users[it.id].name);jb_add(b,",\"handle\":");jb_quote(b,fg_users[it.id].handle);jb_printf(b,",\"connections\":%d}",it.score);}jb_printf(b,"],\"engine_us\":%llu}",ticks_us()-start);heap_free(&h);}
  else if(strstr(path,"/api/communities")){UnionFind u;if(!uf_init(&u,fg_user_count)){*status=500;jb_printf(b,"{\"error\":\"Allocation failed\",\"engine_us\":%llu}",ticks_us()-start);}else{for(size_t i=0;i<fg_user_count;i++)for(size_t j=0;j<fg_graph.adj[i].len;j++)uf_union(&u,(int)i,fg_graph.adj[i].items[j]);jb_add(b,"{\"components\":[");for(size_t i=0;i<fg_user_count;i++){if(i)jb_char(b,',');jb_printf(b,"%d",uf_find(&u,(int)i));}jb_printf(b,"],\"count\":%zu,\"engine_us\":%llu}",uf_components(&u),ticks_us()-start);uf_free(&u);}}
+ else if(strstr(path,"/api/blocked")&&!strcmp(method,"GET")){
+  FGUser*u=&fg_users[uid];
+  jb_add(b,"{\"blocked\":[");
+  for(int i=0;i<u->blocked_count;i++){
+   if(i)jb_char(b,',');
+   emit_user(b,u->blocked[i]);
+  }
+  jb_printf(b,"],\"count\":%d,\"engine_us\":%llu}",u->blocked_count,ticks_us()-start);
+ }
  else if(strstr(path,"/api/block")&&!strcmp(method,"POST")){
   char target_str[96]="";
   param(body,"target",target_str,sizeof target_str);
@@ -235,8 +244,25 @@ static void route_api(const char*method,const char*path,const char*body,JsonBuf*
    FGUser*u=&fg_users[uid];
    int found=-1;
    for(int i=0;i<u->blocked_count;i++)if(u->blocked[i]==target)found=i;
-   if(!strcmp(action,"unblock")){if(found>=0){u->blocked[found]=u->blocked[--u->blocked_count];} }
-   else if(found<0&&u->blocked_count<128)u->blocked[u->blocked_count++]=target;
+   if(!strcmp(action,"unblock")){
+    if(found>=0){u->blocked[found]=u->blocked[--u->blocked_count];}
+   }else{
+    if(found<0&&u->blocked_count<128)u->blocked[u->blocked_count++]=target;
+    if(are_friends(&fg_graph,uid,target)){
+     remove_edge(&fg_graph,uid,target);
+     persistence_save_edges(&fg_graph);
+    }
+    int req_changed=0;
+    for(size_t i=0;i<fg_request_count;i++){
+     if(fg_requests[i].status==0 &&
+        ((fg_requests[i].from==uid && fg_requests[i].to==target) ||
+         (fg_requests[i].from==target && fg_requests[i].to==uid))){
+      fg_requests[i].status=-2;
+      req_changed=1;
+     }
+    }
+    if(req_changed) persistence_save_requests();
+   }
    jb_printf(b,"{\"ok\":true,\"engine_us\":%llu}",ticks_us()-start);
   }
  }

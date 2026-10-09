@@ -142,12 +142,33 @@ async function main() {
   });
   assert.strictEqual(rBlock.status, 200);
 
+  // Check GET /api/blocked includes student04
+  const rBlockedList = await fetch(`${BASE_URL}/api/blocked?user=student01`);
+  assert.strictEqual(rBlockedList.status, 200, 'GET /api/blocked should return 200');
+  const dBlockedList = await rBlockedList.json();
+  assert(Array.isArray(dBlockedList.blocked), 'blocked should be an array');
+  assert(dBlockedList.blocked.some(u => u.handle === 'student04'), 'student04 should be in blocked list');
+
+  // Verify request cannot be sent while blocked
+  const rBlockedSend = await fetch(`${BASE_URL}/api/requests/send`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: 'student01', to: 'student04', user: 'student01' })
+  });
+  assert.strictEqual(rBlockedSend.status, 400, 'Cannot send friend request to blocked user');
+
   const rUnblock = await fetch(`${BASE_URL}/api/block`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ user: 'student01', target: 'student04', action: 'unblock' })
   });
   assert.strictEqual(rUnblock.status, 200);
+
+  // Check GET /api/blocked no longer includes student04
+  const rBlockedAfter = await fetch(`${BASE_URL}/api/blocked?user=student01`);
+  assert.strictEqual(rBlockedAfter.status, 200);
+  const dBlockedAfter = await rBlockedAfter.json();
+  assert(!dBlockedAfter.blocked.some(u => u.handle === 'student04'), 'student04 should no longer be blocked');
 
   // Cleanup edge created during test so CSV state is restored
   await fetch(`${BASE_URL}/api/friends/remove`, {
